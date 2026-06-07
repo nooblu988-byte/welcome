@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder } = require('discord.js');
 const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
@@ -45,7 +45,7 @@ client.on('guildMemberAdd', (member) => {
   const settings = welcomeSettings[guildId] || {
     enabled: true,
     title: 'Welcome to the Server!',
-    description: `Welcome ${member.user.username}! 👋\n\nWe're glad to have you here.`,
+    description: `Welcome {user}! 👋\n\nWe're glad to have you here.`,
     color: '#0099ff',
     imageUrl: null,
   };
@@ -83,6 +83,56 @@ client.on('guildMemberAdd', (member) => {
   }
 });
 
+// Function to show welcome modal
+function showWelcomeModal(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId('welcome_modal')
+    .setTitle('Setup Welcome Message');
+
+  const guildId = interaction.guildId;
+
+  const titleInput = new TextInputBuilder()
+    .setCustomId('welcome_title')
+    .setLabel('Title')
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(256)
+    .setValue(welcomeSettings[guildId]?.title || 'Welcome!')
+    .setRequired(true);
+
+  const descInput = new TextInputBuilder()
+    .setCustomId('welcome_desc')
+    .setLabel('Message ({user}, {server})')
+    .setStyle(TextInputStyle.Paragraph)
+    .setMaxLength(4000)
+    .setValue(welcomeSettings[guildId]?.description || 'Welcome {user}!')
+    .setRequired(true);
+
+  const colorInput = new TextInputBuilder()
+    .setCustomId('welcome_color')
+    .setLabel('Color (#0099ff)')
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(7)
+    .setValue(welcomeSettings[guildId]?.color || '#0099ff')
+    .setRequired(true);
+
+  const imageInput = new TextInputBuilder()
+    .setCustomId('welcome_image')
+    .setLabel('Image URL')
+    .setStyle(TextInputStyle.Short)
+    .setMaxLength(500)
+    .setValue(welcomeSettings[guildId]?.imageUrl || '')
+    .setRequired(false);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(titleInput),
+    new ActionRowBuilder().addComponents(descInput),
+    new ActionRowBuilder().addComponents(colorInput),
+    new ActionRowBuilder().addComponents(imageInput)
+  );
+
+  interaction.showModal(modal);
+}
+
 // Message command handler
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.content.startsWith(PREFIX)) return;
@@ -93,53 +143,20 @@ client.on('messageCreate', async (message) => {
   // Welcome setup command
   if (command === 'welcomeset') {
     if (!message.member.permissions.has('ManageGuild')) {
-      return message.reply('❌ You need to have "Manage Server" permission!');
+      return message.reply('❌ You need "Manage Server" permission!');
     }
 
-    const modal = new ModalBuilder()
-      .setCustomId('welcome_modal')
-      .setTitle('Setup Welcome Message');
+    const button = new ButtonBuilder()
+      .setCustomId('open_welcome_modal')
+      .setLabel('Setup Welcome')
+      .setStyle(ButtonStyle.Primary);
 
-    const titleInput = new TextInputBuilder()
-      .setCustomId('welcome_title')
-      .setLabel('Title')
-      .setStyle(TextInputStyle.Short)
-      .setMaxLength(256)
-      .setValue(welcomeSettings[message.guildId]?.title || 'Welcome!')
-      .setRequired(true);
+    const row = new ActionRowBuilder().addComponents(button);
 
-    const descInput = new TextInputBuilder()
-      .setCustomId('welcome_desc')
-      .setLabel('Message ({user}, {server})')
-      .setStyle(TextInputStyle.Paragraph)
-      .setMaxLength(4000)
-      .setValue(welcomeSettings[message.guildId]?.description || 'Welcome {user}!')
-      .setRequired(true);
-
-    const colorInput = new TextInputBuilder()
-      .setCustomId('welcome_color')
-      .setLabel('Color (#0099ff)')
-      .setStyle(TextInputStyle.Short)
-      .setMaxLength(7)
-      .setValue(welcomeSettings[message.guildId]?.color || '#0099ff')
-      .setRequired(true);
-
-    const imageInput = new TextInputBuilder()
-      .setCustomId('welcome_image')
-      .setLabel('Image URL')
-      .setStyle(TextInputStyle.Short)
-      .setMaxLength(500)
-      .setValue(welcomeSettings[message.guildId]?.imageUrl || '')
-      .setRequired(false);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(titleInput),
-      new ActionRowBuilder().addComponents(descInput),
-      new ActionRowBuilder().addComponents(colorInput),
-      new ActionRowBuilder().addComponents(imageInput)
-    );
-
-    await message.showModal(modal);
+    message.reply({
+      content: '🎨 Click the button to setup your welcome message!',
+      components: [row],
+    });
   }
 
   // Welcome preview
@@ -175,7 +192,7 @@ client.on('messageCreate', async (message) => {
   // Toggle welcome
   if (command === 'welcometoggle') {
     if (!message.member.permissions.has('ManageGuild')) {
-      return message.reply('❌ You need to have "Manage Server" permission!');
+      return message.reply('❌ You need "Manage Server" permission!');
     }
 
     const guildId = message.guildId;
@@ -217,43 +234,62 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Handle modal submissions
+// Handle button interactions
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isModalSubmit()) return;
-
-  if (interaction.customId === 'welcome_modal') {
-    const title = interaction.fields.getTextInputValue('welcome_title');
-    const description = interaction.fields.getTextInputValue('welcome_desc');
-    const color = interaction.fields.getTextInputValue('welcome_color');
-    const imageUrl = interaction.fields.getTextInputValue('welcome_image') || null;
-
-    const guildId = interaction.guildId;
-
-    // Validate hex color
-    const hexRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
-    if (!hexRegex.test(color)) {
-      return interaction.reply({ content: '❌ Invalid color! Use format like #0099ff', ephemeral: true });
+  if (interaction.isButton()) {
+    if (interaction.customId === 'open_welcome_modal') {
+      if (!interaction.member.permissions.has('ManageGuild')) {
+        return interaction.reply({
+          content: '❌ You need "Manage Server" permission!',
+          ephemeral: true,
+        });
+      }
+      showWelcomeModal(interaction);
     }
+  }
 
-    // Validate image URL
-    if (imageUrl && !imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) {
-      return interaction.reply({ content: '❌ Invalid image URL! Must be a direct image link.', ephemeral: true });
+  // Handle modal submissions
+  if (interaction.isModalSubmit()) {
+    if (interaction.customId === 'welcome_modal') {
+      const title = interaction.fields.getTextInputValue('welcome_title');
+      const description = interaction.fields.getTextInputValue('welcome_desc');
+      const color = interaction.fields.getTextInputValue('welcome_color');
+      const imageUrl = interaction.fields.getTextInputValue('welcome_image') || null;
+
+      const guildId = interaction.guildId;
+
+      // Validate hex color
+      const hexRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
+      if (!hexRegex.test(color)) {
+        return interaction.reply({
+          content: '❌ Invalid color! Use format like #0099ff',
+          ephemeral: true,
+        });
+      }
+
+      // Validate image URL
+      if (imageUrl && !imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) {
+        return interaction.reply({
+          content: '❌ Invalid image URL! Must be a direct image link.',
+          ephemeral: true,
+        });
+      }
+
+      welcomeSettings[guildId] = {
+        enabled: true,
+        title,
+        description,
+        color,
+        imageUrl,
+      };
+
+      saveSettings(welcomeSettings);
+
+      interaction.reply({
+        content: '✅ Welcome settings saved! Next member will receive the new welcome message.',
+        ephemeral: true,
+      });
     }
-
-    welcomeSettings[guildId] = {
-      enabled: true,
-      title,
-      description,
-      color,
-      imageUrl,
-    };
-
-    saveSettings(welcomeSettings);
-
-    interaction.reply({
-      content: '✅ Welcome settings saved!',
-      ephemeral: true,
-    });
   }
 });
 
