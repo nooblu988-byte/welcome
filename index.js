@@ -1,5 +1,7 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const dotenv = require('dotenv');
+const fs = require('fs');
+const path = require('path');
 
 dotenv.config();
 
@@ -9,24 +11,51 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
   ],
 });
 
 const PREFIX = process.env.PREFIX || '!';
+const dataFile = path.join(__dirname, 'welcome-settings.json');
+
+// Load welcome settings
+function loadSettings() {
+  if (fs.existsSync(dataFile)) {
+    return JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+  }
+  return {};
+}
+
+// Save welcome settings
+function saveSettings(settings) {
+  fs.writeFileSync(dataFile, JSON.stringify(settings, null, 2), 'utf8');
+}
+
+let welcomeSettings = loadSettings();
 
 // Bot ready event
 client.on('ready', () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
-  client.user.setActivity('your server', { type: 'WATCHING' });
+  client.user.setActivity('members joining', { type: 'WATCHING' });
 });
 
 // Welcome message when member joins
 client.on('guildMemberAdd', (member) => {
+  const guildId = member.guild.id;
+  const settings = welcomeSettings[guildId] || {
+    enabled: true,
+    title: 'Welcome to the Server!',
+    description: `Welcome ${member.user.username}! 👋\n\nWe're glad to have you here.`,
+    color: '#0099ff',
+    imageUrl: null,
+  };
+
+  if (!settings.enabled) return;
+
   const welcomeEmbed = new EmbedBuilder()
-    .setColor('#0099ff')
-    .setTitle('Welcome to the Server!')
-    .setDescription(`Welcome ${member.user.username}! 👋\n\nWe're glad to have you here. Please check the rules and have fun!`)
-    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .setColor(settings.color)
+    .setTitle(settings.title)
+    .setDescription(settings.description.replace('{user}', member.user.username).replace('{server}', member.guild.name))
     .addFields(
       { name: 'Member Count', value: `You are member #${member.guild.memberCount}`, inline: true },
       { name: 'Server', value: member.guild.name, inline: true }
@@ -34,7 +63,13 @@ client.on('guildMemberAdd', (member) => {
     .setFooter({ text: `Joined at ${member.joinedAt.toDateString()}` })
     .setTimestamp();
 
-  // Send to a welcome channel (if it exists)
+  if (settings.imageUrl) {
+    welcomeEmbed.setImage(settings.imageUrl);
+  }
+
+  welcomeEmbed.setThumbnail(member.user.displayAvatarURL({ dynamic: true }));
+
+  // Find welcome channel
   const welcomeChannel = member.guild.channels.cache.find(
     (ch) => ch.name === 'welcome' && ch.isTextBased()
   );
@@ -42,7 +77,6 @@ client.on('guildMemberAdd', (member) => {
   if (welcomeChannel) {
     welcomeChannel.send({ embeds: [welcomeEmbed] });
   } else {
-    // Send DM if no welcome channel
     member.send({ embeds: [welcomeEmbed] }).catch(() => {
       console.log(`Could not send DM to ${member.user.tag}`);
     });
@@ -50,41 +84,172 @@ client.on('guildMemberAdd', (member) => {
 });
 
 // Message command handler
-client.on('messageCreate', (message) => {
+client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.content.startsWith(PREFIX)) return;
 
   const args = message.content.slice(PREFIX.length).trim().split(/ +/);
   const command = args.shift().toLowerCase();
 
-  // Welcome command
-  if (command === 'welcome') {
-    const welcomeEmbed = new EmbedBuilder()
-      .setColor('#0099ff')
-      .setTitle('Welcome Command')
-      .setDescription('This is the welcome message for this server!')
-      .setTimestamp();
+  // Welcome setup command
+  if (command === 'welcomeset') {
+    if (!message.member.permissions.has('ManageGuild')) {
+      return message.reply('❌ You need to have "Manage Server" permission!');
+    }
 
-    message.reply({ embeds: [welcomeEmbed] });
+    const modal = new ModalBuilder()
+      .setCustomId('welcome_modal')
+      .setTitle('Setup Welcome Message');
+
+    const titleInput = new TextInputBuilder()
+      .setCustomId('welcome_title')
+      .setLabel('Welcome Title')
+      .setStyle(TextInputStyle.Short)
+      .setValue(welcomeSettings[message.guildId]?.title || 'Welcome to the Server!')
+      .setRequired(true);
+
+    const descInput = new TextInputBuilder()
+      .setCustomId('welcome_desc')
+      .setLabel('Welcome Description (Use {user} and {server} for placeholders)')
+      .setStyle(TextInputStyle.Paragraph)
+      .setValue(welcomeSettings[message.guildId]?.description || 'Welcome {user}! 👋\n\nWe\'re glad to have you here.')
+      .setRequired(true);
+
+    const colorInput = new TextInputBuilder()
+      .setCustomId('welcome_color')
+      .setLabel('Color (hex code like #0099ff)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(welcomeSettings[message.guildId]?.color || '#0099ff')
+      .setRequired(true);
+
+    const imageInput = new TextInputBuilder()
+      .setCustomId('welcome_image')
+      .setLabel('Image URL (leave blank for none)')
+      .setStyle(TextInputStyle.Short)
+      .setValue(welcomeSettings[message.guildId]?.imageUrl || '')
+      .setRequired(false);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(titleInput),
+      new ActionRowBuilder().addComponents(descInput),
+      new ActionRowBuilder().addComponents(colorInput),
+      new ActionRowBuilder().addComponents(imageInput)
+    );
+
+    await message.showModal(modal);
   }
 
-  // Ping command
-  if (command === 'ping') {
-    message.reply(`🏓 Pong! Latency is ${message.client.ws.ping}ms.`);
+  // Welcome preview
+  if (command === 'welcomepreview') {
+    const guildId = message.guildId;
+    const settings = welcomeSettings[guildId] || {
+      title: 'Welcome to the Server!',
+      description: `Welcome ${message.author.username}! 👋\n\nWe're glad to have you here.`,
+      color: '#0099ff',
+      imageUrl: null,
+    };
+
+    const previewEmbed = new EmbedBuilder()
+      .setColor(settings.color)
+      .setTitle(settings.title)
+      .setDescription(settings.description.replace('{user}', message.author.username).replace('{server}', message.guild.name))
+      .addFields(
+        { name: 'Member Count', value: `You are member #${message.guild.memberCount}`, inline: true },
+        { name: 'Server', value: message.guild.name, inline: true }
+      )
+      .setFooter({ text: `Joined at ${new Date().toDateString()}` })
+      .setTimestamp();
+
+    if (settings.imageUrl) {
+      previewEmbed.setImage(settings.imageUrl);
+    }
+
+    previewEmbed.setThumbnail(message.author.displayAvatarURL({ dynamic: true }));
+
+    message.reply({ embeds: [previewEmbed] });
+  }
+
+  // Toggle welcome
+  if (command === 'welcometoggle') {
+    if (!message.member.permissions.has('ManageGuild')) {
+      return message.reply('❌ You need to have "Manage Server" permission!');
+    }
+
+    const guildId = message.guildId;
+    if (!welcomeSettings[guildId]) {
+      welcomeSettings[guildId] = {
+        enabled: true,
+        title: 'Welcome to the Server!',
+        description: 'Welcome {user}! 👋',
+        color: '#0099ff',
+        imageUrl: null,
+      };
+    }
+
+    welcomeSettings[guildId].enabled = !welcomeSettings[guildId].enabled;
+    saveSettings(welcomeSettings);
+
+    message.reply(`✅ Welcome messages are now ${welcomeSettings[guildId].enabled ? '**enabled**' : '**disabled**'}!`);
   }
 
   // Help command
   if (command === 'help') {
     const helpEmbed = new EmbedBuilder()
       .setColor('#0099ff')
-      .setTitle('Bot Commands')
+      .setTitle('📚 Bot Commands')
       .addFields(
-        { name: `${PREFIX}welcome`, value: 'Shows a welcome message' },
-        { name: `${PREFIX}ping`, value: 'Shows bot latency' },
-        { name: `${PREFIX}help`, value: 'Shows this message' }
+        { name: `${PREFIX}welcomeset`, value: 'Setup/customize welcome message (Admin only)', inline: false },
+        { name: `${PREFIX}welcomepreview`, value: 'Preview welcome message', inline: false },
+        { name: `${PREFIX}welcometoggle`, value: 'Enable/disable welcome messages (Admin only)', inline: false },
+        { name: `${PREFIX}help`, value: 'Shows this message', inline: false }
       )
       .setTimestamp();
 
     message.reply({ embeds: [helpEmbed] });
+  }
+
+  // Ping command
+  if (command === 'ping') {
+    message.reply(`🏓 Pong! Latency is ${message.client.ws.ping}ms.`);
+  }
+});
+
+// Handle modal submissions
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isModalSubmit()) return;
+
+  if (interaction.customId === 'welcome_modal') {
+    const title = interaction.fields.getTextInputValue('welcome_title');
+    const description = interaction.fields.getTextInputValue('welcome_desc');
+    const color = interaction.fields.getTextInputValue('welcome_color');
+    const imageUrl = interaction.fields.getTextInputValue('welcome_image') || null;
+
+    const guildId = interaction.guildId;
+
+    // Validate hex color
+    const hexRegex = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
+    if (!hexRegex.test(color)) {
+      return interaction.reply({ content: '❌ Invalid color! Use format like #0099ff', ephemeral: true });
+    }
+
+    // Validate image URL
+    if (imageUrl && !imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) {
+      return interaction.reply({ content: '❌ Invalid image URL! Must be a direct link to an image file.', ephemeral: true });
+    }
+
+    welcomeSettings[guildId] = {
+      enabled: true,
+      title,
+      description,
+      color,
+      imageUrl,
+    };
+
+    saveSettings(welcomeSettings);
+
+    interaction.reply({
+      content: '✅ Welcome message settings updated!',
+      ephemeral: true,
+    });
   }
 });
 
