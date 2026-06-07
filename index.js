@@ -1,14 +1,14 @@
-const { Client, Intents, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const dotenv = require('dotenv');
 
 dotenv.config();
 
 const client = new Client({
   intents: [
-    Intents.FLAGS.GUILDS,
-    Intents.FLAGS.GUILD_MEMBERS,
-    Intents.FLAGS.GUILD_MESSAGES,
-    Intents.FLAGS.MESSAGE_CONTENT,
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ],
 });
 
@@ -36,7 +36,7 @@ client.on('guildMemberAdd', (member) => {
 
   // Send to a welcome channel (if it exists)
   const welcomeChannel = member.guild.channels.cache.find(
-    (ch) => ch.name === 'welcome' && ch.isText()
+    (ch) => ch.name === 'welcome' && ch.isTextBased()
   );
 
   if (welcomeChannel) {
