@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
@@ -44,10 +44,14 @@ client.on('guildMemberAdd', (member) => {
   const guildId = member.guild.id;
   const settings = welcomeSettings[guildId] || {
     enabled: true,
-    title: 'Welcome to the Server!',
-    description: `Welcome {user}! 👋\n\nWe're glad to have you here.`,
+    title: '👋 Welcome!',
+    description: 'Welcome to our server!',
     color: '#0099ff',
-    imageUrl: null,
+    bannerUrl: null,
+    buttons: [
+      { label: 'Read Rules', emoji: '📖', url: '', channelId: '' },
+      { label: 'Intro Channel', emoji: '👤', url: '', channelId: '' },
+    ],
   };
 
   if (!settings.enabled) return;
@@ -56,18 +60,49 @@ client.on('guildMemberAdd', (member) => {
     .setColor(settings.color)
     .setTitle(settings.title)
     .setDescription(settings.description.replace('{user}', member.user.username).replace('{server}', member.guild.name))
-    .addFields(
-      { name: 'Member Count', value: `You are member #${member.guild.memberCount}`, inline: true },
-      { name: 'Server', value: member.guild.name, inline: true }
-    )
-    .setFooter({ text: `Joined at ${member.joinedAt.toDateString()}` })
+    .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
+    .setFooter({ text: `${member.guild.name} • Member #${member.guild.memberCount}` })
     .setTimestamp();
 
-  if (settings.imageUrl) {
-    welcomeEmbed.setImage(settings.imageUrl);
+  if (settings.bannerUrl) {
+    welcomeEmbed.setImage(settings.bannerUrl);
   }
 
-  welcomeEmbed.setThumbnail(member.user.displayAvatarURL({ dynamic: true }));
+  // Create buttons
+  const buttonRows = [];
+  if (settings.buttons && settings.buttons.length > 0) {
+    let currentRow = new ActionRowBuilder();
+    let buttonCount = 0;
+
+    for (const btn of settings.buttons) {
+      if (buttonCount === 5) {
+        buttonRows.push(currentRow);
+        currentRow = new ActionRowBuilder();
+        buttonCount = 0;
+      }
+
+      const button = new ButtonBuilder()
+        .setLabel(btn.label)
+        .setStyle(ButtonStyle.Link);
+
+      if (btn.emoji) {
+        button.setEmoji(btn.emoji);
+      }
+
+      if (btn.url) {
+        button.setURL(btn.url);
+      } else if (btn.channelId) {
+        button.setURL(`https://discord.com/channels/${guildId}/${btn.channelId}`);
+      }
+
+      currentRow.addComponents(button);
+      buttonCount++;
+    }
+
+    if (currentRow.components.length > 0) {
+      buttonRows.push(currentRow);
+    }
+  }
 
   // Find welcome channel
   const welcomeChannel = member.guild.channels.cache.find(
@@ -75,9 +110,15 @@ client.on('guildMemberAdd', (member) => {
   );
 
   if (welcomeChannel) {
-    welcomeChannel.send({ embeds: [welcomeEmbed] });
+    welcomeChannel.send({
+      embeds: [welcomeEmbed],
+      components: buttonRows,
+    });
   } else {
-    member.send({ embeds: [welcomeEmbed] }).catch(() => {
+    member.send({
+      embeds: [welcomeEmbed],
+      components: buttonRows,
+    }).catch(() => {
       console.log(`Could not send DM to ${member.user.tag}`);
     });
   }
@@ -90,21 +131,22 @@ function showWelcomeModal(interaction) {
     .setTitle('Setup Welcome Message');
 
   const guildId = interaction.guildId;
+  const settings = welcomeSettings[guildId] || {};
 
   const titleInput = new TextInputBuilder()
     .setCustomId('welcome_title')
-    .setLabel('Title')
+    .setLabel('Title (e.g. 👋 Welcome!)')
     .setStyle(TextInputStyle.Short)
     .setMaxLength(256)
-    .setValue(welcomeSettings[guildId]?.title || 'Welcome!')
+    .setValue(settings.title || '👋 Welcome!')
     .setRequired(true);
 
   const descInput = new TextInputBuilder()
     .setCustomId('welcome_desc')
-    .setLabel('Message ({user}, {server})')
+    .setLabel('Description ({user}, {server})')
     .setStyle(TextInputStyle.Paragraph)
     .setMaxLength(4000)
-    .setValue(welcomeSettings[guildId]?.description || 'Welcome {user}!')
+    .setValue(settings.description || 'Welcome {user}!')
     .setRequired(true);
 
   const colorInput = new TextInputBuilder()
@@ -112,22 +154,22 @@ function showWelcomeModal(interaction) {
     .setLabel('Color (#0099ff)')
     .setStyle(TextInputStyle.Short)
     .setMaxLength(7)
-    .setValue(welcomeSettings[guildId]?.color || '#0099ff')
+    .setValue(settings.color || '#0099ff')
     .setRequired(true);
 
-  const imageInput = new TextInputBuilder()
-    .setCustomId('welcome_image')
-    .setLabel('Image URL')
+  const bannerInput = new TextInputBuilder()
+    .setCustomId('welcome_banner')
+    .setLabel('Banner Image URL')
     .setStyle(TextInputStyle.Short)
     .setMaxLength(500)
-    .setValue(welcomeSettings[guildId]?.imageUrl || '')
+    .setValue(settings.bannerUrl || '')
     .setRequired(false);
 
   modal.addComponents(
     new ActionRowBuilder().addComponents(titleInput),
     new ActionRowBuilder().addComponents(descInput),
     new ActionRowBuilder().addComponents(colorInput),
-    new ActionRowBuilder().addComponents(imageInput)
+    new ActionRowBuilder().addComponents(bannerInput)
   );
 
   interaction.showModal(modal);
@@ -154,39 +196,119 @@ client.on('messageCreate', async (message) => {
     const row = new ActionRowBuilder().addComponents(button);
 
     message.reply({
-      content: '🎨 Click the button to setup your welcome message!',
+      content: '🎨 Click the button to customize your welcome message!',
       components: [row],
     });
+  }
+
+  // Add button command
+  if (command === 'addbtn') {
+    if (!message.member.permissions.has('ManageGuild')) {
+      return message.reply('❌ You need "Manage Server" permission!');
+    }
+
+    const guildId = message.guildId;
+    if (!welcomeSettings[guildId]) {
+      welcomeSettings[guildId] = {
+        enabled: true,
+        title: '👋 Welcome!',
+        description: 'Welcome to our server!',
+        color: '#0099ff',
+        bannerUrl: null,
+        buttons: [],
+      };
+    }
+
+    const label = args[0] || 'Button';
+    const emoji = args[1] || '';
+    const channelId = args[2] || '';
+
+    welcomeSettings[guildId].buttons.push({
+      label,
+      emoji,
+      url: '',
+      channelId,
+    });
+
+    saveSettings(welcomeSettings);
+    message.reply(`✅ Button added! Label: **${label}**, Emoji: **${emoji}**`);
+  }
+
+  // Clear buttons command
+  if (command === 'clearbtn') {
+    if (!message.member.permissions.has('ManageGuild')) {
+      return message.reply('❌ You need "Manage Server" permission!');
+    }
+
+    const guildId = message.guildId;
+    if (welcomeSettings[guildId]) {
+      welcomeSettings[guildId].buttons = [];
+      saveSettings(welcomeSettings);
+      message.reply('✅ All buttons cleared!');
+    }
   }
 
   // Welcome preview
   if (command === 'welcomepreview') {
     const guildId = message.guildId;
     const settings = welcomeSettings[guildId] || {
-      title: 'Welcome!',
-      description: `Welcome {user}!`,
+      title: '👋 Welcome!',
+      description: 'Welcome to our server!',
       color: '#0099ff',
-      imageUrl: null,
+      bannerUrl: null,
+      buttons: [],
     };
 
     const previewEmbed = new EmbedBuilder()
       .setColor(settings.color)
       .setTitle(settings.title)
       .setDescription(settings.description.replace('{user}', message.author.username).replace('{server}', message.guild.name))
-      .addFields(
-        { name: 'Member Count', value: `You are member #${message.guild.memberCount}`, inline: true },
-        { name: 'Server', value: message.guild.name, inline: true }
-      )
-      .setFooter({ text: `Joined at ${new Date().toDateString()}` })
+      .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+      .setFooter({ text: `${message.guild.name} • Member #${message.guild.memberCount}` })
       .setTimestamp();
 
-    if (settings.imageUrl) {
-      previewEmbed.setImage(settings.imageUrl);
+    if (settings.bannerUrl) {
+      previewEmbed.setImage(settings.bannerUrl);
     }
 
-    previewEmbed.setThumbnail(message.author.displayAvatarURL({ dynamic: true }));
+    const buttonRows = [];
+    if (settings.buttons && settings.buttons.length > 0) {
+      let currentRow = new ActionRowBuilder();
+      let buttonCount = 0;
 
-    message.reply({ embeds: [previewEmbed] });
+      for (const btn of settings.buttons) {
+        if (buttonCount === 5) {
+          buttonRows.push(currentRow);
+          currentRow = new ActionRowBuilder();
+          buttonCount = 0;
+        }
+
+        const button = new ButtonBuilder()
+          .setLabel(btn.label)
+          .setStyle(ButtonStyle.Link);
+
+        if (btn.emoji) {
+          button.setEmoji(btn.emoji);
+        }
+
+        if (btn.url) {
+          button.setURL(btn.url);
+        } else if (btn.channelId) {
+          button.setURL(`https://discord.com/channels/${guildId}/${btn.channelId}`);
+        } else {
+          button.setURL('https://discord.com');
+        }
+
+        currentRow.addComponents(button);
+        buttonCount++;
+      }
+
+      if (currentRow.components.length > 0) {
+        buttonRows.push(currentRow);
+      }
+    }
+
+    message.reply({ embeds: [previewEmbed], components: buttonRows });
   }
 
   // Toggle welcome
@@ -199,10 +321,11 @@ client.on('messageCreate', async (message) => {
     if (!welcomeSettings[guildId]) {
       welcomeSettings[guildId] = {
         enabled: true,
-        title: 'Welcome!',
-        description: 'Welcome {user}!',
+        title: '👋 Welcome!',
+        description: 'Welcome to our server!',
         color: '#0099ff',
-        imageUrl: null,
+        bannerUrl: null,
+        buttons: [],
       };
     }
 
@@ -218,11 +341,13 @@ client.on('messageCreate', async (message) => {
       .setColor('#0099ff')
       .setTitle('📚 Bot Commands')
       .addFields(
-        { name: `${PREFIX}welcomeset`, value: 'Setup welcome message', inline: false },
+        { name: `${PREFIX}welcomeset`, value: 'Setup welcome message (customize title, desc, color, image)', inline: false },
+        { name: `${PREFIX}addbtn <label> <emoji> <channelId>`, value: 'Add a button to welcome message', inline: false },
+        { name: `${PREFIX}clearbtn`, value: 'Remove all buttons', inline: false },
         { name: `${PREFIX}welcomepreview`, value: 'Preview welcome message', inline: false },
         { name: `${PREFIX}welcometoggle`, value: 'Enable/disable welcome', inline: false },
-        { name: `${PREFIX}help`, value: 'Show this message', inline: false }
       )
+      .setDescription('Admin commands - need Manage Server permission')
       .setTimestamp();
 
     message.reply({ embeds: [helpEmbed] });
@@ -254,7 +379,7 @@ client.on('interactionCreate', async (interaction) => {
       const title = interaction.fields.getTextInputValue('welcome_title');
       const description = interaction.fields.getTextInputValue('welcome_desc');
       const color = interaction.fields.getTextInputValue('welcome_color');
-      const imageUrl = interaction.fields.getTextInputValue('welcome_image') || null;
+      const bannerUrl = interaction.fields.getTextInputValue('welcome_banner') || null;
 
       const guildId = interaction.guildId;
 
@@ -268,7 +393,7 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       // Validate image URL
-      if (imageUrl && !imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) {
+      if (bannerUrl && !bannerUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) {
         return interaction.reply({
           content: '❌ Invalid image URL! Must be a direct image link.',
           ephemeral: true,
@@ -280,13 +405,14 @@ client.on('interactionCreate', async (interaction) => {
         title,
         description,
         color,
-        imageUrl,
+        bannerUrl,
+        buttons: welcomeSettings[guildId]?.buttons || [],
       };
 
       saveSettings(welcomeSettings);
 
       interaction.reply({
-        content: '✅ Welcome settings saved! Next member will receive the new welcome message.',
+        content: '✅ Welcome settings saved!',
         ephemeral: true,
       });
     }
