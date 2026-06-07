@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
 const dotenv = require('dotenv');
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +17,12 @@ const client = new Client({
 
 const PREFIX = process.env.PREFIX || '!';
 const dataFile = path.join(__dirname, 'welcome-settings.json');
+const imagesDir = path.join(__dirname, 'welcome-images');
+
+// Create images directory if it doesn't exist
+if (!fs.existsSync(imagesDir)) {
+  fs.mkdirSync(imagesDir);
+}
 
 // Load welcome settings
 function loadSettings() {
@@ -48,6 +54,7 @@ client.on('guildMemberAdd', (member) => {
     description: 'Welcome to our server!',
     color: '#0099ff',
     bannerUrl: null,
+    bannerFile: null,
     buttons: [
       { label: 'Read Rules', emoji: '📖', url: '', channelId: '' },
       { label: 'Intro Channel', emoji: '👤', url: '', channelId: '' },
@@ -64,8 +71,11 @@ client.on('guildMemberAdd', (member) => {
     .setFooter({ text: `${member.guild.name} • Member #${member.guild.memberCount}` })
     .setTimestamp();
 
+  // Handle banner - either URL or local file
   if (settings.bannerUrl) {
     welcomeEmbed.setImage(settings.bannerUrl);
+  } else if (settings.bannerFile) {
+    welcomeEmbed.setImage(`attachment://${settings.bannerFile}`);
   }
 
   // Create buttons
@@ -109,16 +119,23 @@ client.on('guildMemberAdd', (member) => {
     (ch) => ch.name === 'welcome' && ch.isTextBased()
   );
 
+  const messageOptions = {
+    embeds: [welcomeEmbed],
+    components: buttonRows,
+  };
+
+  // Add file attachment if local file exists
+  if (settings.bannerFile) {
+    const filePath = path.join(imagesDir, settings.bannerFile);
+    if (fs.existsSync(filePath)) {
+      messageOptions.files = [filePath];
+    }
+  }
+
   if (welcomeChannel) {
-    welcomeChannel.send({
-      embeds: [welcomeEmbed],
-      components: buttonRows,
-    });
+    welcomeChannel.send(messageOptions);
   } else {
-    member.send({
-      embeds: [welcomeEmbed],
-      components: buttonRows,
-    }).catch(() => {
+    member.send(messageOptions).catch(() => {
       console.log(`Could not send DM to ${member.user.tag}`);
     });
   }
@@ -159,7 +176,7 @@ function showWelcomeModal(interaction) {
 
   const bannerInput = new TextInputBuilder()
     .setCustomId('welcome_banner')
-    .setLabel('Banner Image URL')
+    .setLabel('Banner Image URL (or leave blank)')
     .setStyle(TextInputStyle.Short)
     .setMaxLength(500)
     .setValue(settings.bannerUrl || '')
@@ -188,17 +205,28 @@ client.on('messageCreate', async (message) => {
       return message.reply('❌ You need "Manage Server" permission!');
     }
 
-    const button = new ButtonBuilder()
-      .setCustomId('open_welcome_modal')
-      .setLabel('Setup Welcome')
-      .setStyle(ButtonStyle.Primary);
+    const embed = new EmbedBuilder()
+      .setColor('#0099ff')
+      .setTitle('🎨 Welcome Setup')
+      .setDescription('Choose an option to setup your welcome message:')
+      .addFields(
+        { name: '🔧 Setup Text', value: 'Click "Setup Message" to customize title, description, and color', inline: false },
+        { name: '🖼️ Upload Image/GIF', value: 'Click "Upload Banner" to upload an image or GIF file', inline: false }
+      );
 
-    const row = new ActionRowBuilder().addComponents(button);
+    const buttons = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('open_welcome_modal')
+          .setLabel('Setup Message')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId('upload_banner')
+          .setLabel('Upload Banner')
+          .setStyle(ButtonStyle.Secondary)
+      );
 
-    message.reply({
-      content: '🎨 Click the button to customize your welcome message!',
-      components: [row],
-    });
+    message.reply({ embeds: [embed], components: [buttons] });
   }
 
   // Add button command
@@ -215,6 +243,7 @@ client.on('messageCreate', async (message) => {
         description: 'Welcome to our server!',
         color: '#0099ff',
         bannerUrl: null,
+        bannerFile: null,
         buttons: [],
       };
     }
@@ -248,6 +277,27 @@ client.on('messageCreate', async (message) => {
     }
   }
 
+  // Remove banner command
+  if (command === 'removebanner') {
+    if (!message.member.permissions.has('ManageGuild')) {
+      return message.reply('❌ You need "Manage Server" permission!');
+    }
+
+    const guildId = message.guildId;
+    if (welcomeSettings[guildId]) {
+      if (welcomeSettings[guildId].bannerFile) {
+        const filePath = path.join(imagesDir, welcomeSettings[guildId].bannerFile);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+      welcomeSettings[guildId].bannerUrl = null;
+      welcomeSettings[guildId].bannerFile = null;
+      saveSettings(welcomeSettings);
+      message.reply('✅ Banner removed!');
+    }
+  }
+
   // Welcome preview
   if (command === 'welcomepreview') {
     const guildId = message.guildId;
@@ -256,6 +306,7 @@ client.on('messageCreate', async (message) => {
       description: 'Welcome to our server!',
       color: '#0099ff',
       bannerUrl: null,
+      bannerFile: null,
       buttons: [],
     };
 
@@ -269,6 +320,8 @@ client.on('messageCreate', async (message) => {
 
     if (settings.bannerUrl) {
       previewEmbed.setImage(settings.bannerUrl);
+    } else if (settings.bannerFile) {
+      previewEmbed.setImage(`attachment://${settings.bannerFile}`);
     }
 
     const buttonRows = [];
@@ -308,7 +361,16 @@ client.on('messageCreate', async (message) => {
       }
     }
 
-    message.reply({ embeds: [previewEmbed], components: buttonRows });
+    const messageOptions = { embeds: [previewEmbed], components: buttonRows };
+
+    if (settings.bannerFile) {
+      const filePath = path.join(imagesDir, settings.bannerFile);
+      if (fs.existsSync(filePath)) {
+        messageOptions.files = [filePath];
+      }
+    }
+
+    message.reply(messageOptions);
   }
 
   // Toggle welcome
@@ -325,6 +387,7 @@ client.on('messageCreate', async (message) => {
         description: 'Welcome to our server!',
         color: '#0099ff',
         bannerUrl: null,
+        bannerFile: null,
         buttons: [],
       };
     }
@@ -341,9 +404,10 @@ client.on('messageCreate', async (message) => {
       .setColor('#0099ff')
       .setTitle('📚 Bot Commands')
       .addFields(
-        { name: `${PREFIX}welcomeset`, value: 'Setup welcome message (customize title, desc, color, image)', inline: false },
+        { name: `${PREFIX}welcomeset`, value: 'Setup welcome message (customize text and upload banner)', inline: false },
         { name: `${PREFIX}addbtn <label> <emoji> <channelId>`, value: 'Add a button to welcome message', inline: false },
         { name: `${PREFIX}clearbtn`, value: 'Remove all buttons', inline: false },
+        { name: `${PREFIX}removebanner`, value: 'Remove uploaded banner image', inline: false },
         { name: `${PREFIX}welcomepreview`, value: 'Preview welcome message', inline: false },
         { name: `${PREFIX}welcometoggle`, value: 'Enable/disable welcome', inline: false },
       )
@@ -370,6 +434,20 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
       showWelcomeModal(interaction);
+    }
+
+    if (interaction.customId === 'upload_banner') {
+      if (!interaction.member.permissions.has('ManageGuild')) {
+        return interaction.reply({
+          content: '❌ You need "Manage Server" permission!',
+          ephemeral: true,
+        });
+      }
+
+      interaction.reply({
+        content: '📤 Upload your banner image/GIF as a reply attachment! (PNG, JPG, GIF, WEBP)\n\nJust reply to this message with your file.',
+        ephemeral: true,
+      });
     }
   }
 
@@ -406,6 +484,7 @@ client.on('interactionCreate', async (interaction) => {
         description,
         color,
         bannerUrl,
+        bannerFile: welcomeSettings[guildId]?.bannerFile || null,
         buttons: welcomeSettings[guildId]?.buttons || [],
       };
 
@@ -416,6 +495,76 @@ client.on('interactionCreate', async (interaction) => {
         ephemeral: true,
       });
     }
+  }
+});
+
+// Handle file uploads for banner
+client.on('messageCreate', async (message) => {
+  // Skip if it's a command message
+  if (message.author.bot || message.content.startsWith(PREFIX)) return;
+
+  // Check if it has attachments
+  if (message.attachments.size === 0) return;
+
+  // Check if user has manage guild permission
+  if (!message.member.permissions.has('ManageGuild')) return;
+
+  // Check if it's a reply asking for banner upload
+  if (!message.reference) return;
+
+  try {
+    const attachment = message.attachments.first();
+    
+    // Validate file type
+    const validTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+    if (!validTypes.includes(attachment.contentType)) {
+      return message.reply('❌ Invalid file type! Only PNG, JPG, GIF, WEBP are supported.');
+    }
+
+    // Validate file size (max 25MB)
+    if (attachment.size > 25 * 1024 * 1024) {
+      return message.reply('❌ File too large! Maximum size is 25MB.');
+    }
+
+    const guildId = message.guildId;
+    const ext = attachment.name.split('.').pop();
+    const filename = `${guildId}-${Date.now()}.${ext}`;
+    const filepath = path.join(imagesDir, filename);
+
+    // Download and save the file
+    const response = await fetch(attachment.url);
+    const buffer = await response.buffer();
+    fs.writeFileSync(filepath, buffer);
+
+    // Remove old banner file if exists
+    if (welcomeSettings[guildId]?.bannerFile) {
+      const oldPath = path.join(imagesDir, welcomeSettings[guildId].bannerFile);
+      if (fs.existsSync(oldPath)) {
+        fs.unlinkSync(oldPath);
+      }
+    }
+
+    // Update settings
+    if (!welcomeSettings[guildId]) {
+      welcomeSettings[guildId] = {
+        enabled: true,
+        title: '👋 Welcome!',
+        description: 'Welcome to our server!',
+        color: '#0099ff',
+        bannerUrl: null,
+        bannerFile: null,
+        buttons: [],
+      };
+    }
+
+    welcomeSettings[guildId].bannerFile = filename;
+    welcomeSettings[guildId].bannerUrl = null;
+    saveSettings(welcomeSettings);
+
+    message.reply('✅ Banner uploaded successfully! It will be shown to new members.');
+  } catch (error) {
+    console.error('Error uploading banner:', error);
+    message.reply('❌ Error uploading banner! Try again.');
   }
 });
 
