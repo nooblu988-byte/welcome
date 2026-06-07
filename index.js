@@ -34,7 +34,7 @@ function saveSettings(settings) {
 let welcomeSettings = loadSettings();
 
 // Bot ready event
-client.on('ready', () => {
+client.on('clientReady', () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
   client.user.setActivity('members joining', { type: 'WATCHING' });
 });
@@ -102,29 +102,33 @@ client.on('messageCreate', async (message) => {
 
     const titleInput = new TextInputBuilder()
       .setCustomId('welcome_title')
-      .setLabel('Welcome Title')
+      .setLabel('Title')
       .setStyle(TextInputStyle.Short)
-      .setValue(welcomeSettings[message.guildId]?.title || 'Welcome to the Server!')
+      .setMaxLength(256)
+      .setValue(welcomeSettings[message.guildId]?.title || 'Welcome!')
       .setRequired(true);
 
     const descInput = new TextInputBuilder()
       .setCustomId('welcome_desc')
-      .setLabel('Welcome Description (Use {user} and {server} for placeholders)')
+      .setLabel('Message ({user}, {server})')
       .setStyle(TextInputStyle.Paragraph)
-      .setValue(welcomeSettings[message.guildId]?.description || 'Welcome {user}! 👋\n\nWe\'re glad to have you here.')
+      .setMaxLength(4000)
+      .setValue(welcomeSettings[message.guildId]?.description || 'Welcome {user}!')
       .setRequired(true);
 
     const colorInput = new TextInputBuilder()
       .setCustomId('welcome_color')
-      .setLabel('Color (hex code like #0099ff)')
+      .setLabel('Color (#0099ff)')
       .setStyle(TextInputStyle.Short)
+      .setMaxLength(7)
       .setValue(welcomeSettings[message.guildId]?.color || '#0099ff')
       .setRequired(true);
 
     const imageInput = new TextInputBuilder()
       .setCustomId('welcome_image')
-      .setLabel('Image URL (leave blank for none)')
+      .setLabel('Image URL')
       .setStyle(TextInputStyle.Short)
+      .setMaxLength(500)
       .setValue(welcomeSettings[message.guildId]?.imageUrl || '')
       .setRequired(false);
 
@@ -142,8 +146,8 @@ client.on('messageCreate', async (message) => {
   if (command === 'welcomepreview') {
     const guildId = message.guildId;
     const settings = welcomeSettings[guildId] || {
-      title: 'Welcome to the Server!',
-      description: `Welcome ${message.author.username}! 👋\n\nWe're glad to have you here.`,
+      title: 'Welcome!',
+      description: `Welcome {user}!`,
       color: '#0099ff',
       imageUrl: null,
     };
@@ -178,8 +182,8 @@ client.on('messageCreate', async (message) => {
     if (!welcomeSettings[guildId]) {
       welcomeSettings[guildId] = {
         enabled: true,
-        title: 'Welcome to the Server!',
-        description: 'Welcome {user}! 👋',
+        title: 'Welcome!',
+        description: 'Welcome {user}!',
         color: '#0099ff',
         imageUrl: null,
       };
@@ -197,10 +201,10 @@ client.on('messageCreate', async (message) => {
       .setColor('#0099ff')
       .setTitle('📚 Bot Commands')
       .addFields(
-        { name: `${PREFIX}welcomeset`, value: 'Setup/customize welcome message (Admin only)', inline: false },
+        { name: `${PREFIX}welcomeset`, value: 'Setup welcome message', inline: false },
         { name: `${PREFIX}welcomepreview`, value: 'Preview welcome message', inline: false },
-        { name: `${PREFIX}welcometoggle`, value: 'Enable/disable welcome messages (Admin only)', inline: false },
-        { name: `${PREFIX}help`, value: 'Shows this message', inline: false }
+        { name: `${PREFIX}welcometoggle`, value: 'Enable/disable welcome', inline: false },
+        { name: `${PREFIX}help`, value: 'Show this message', inline: false }
       )
       .setTimestamp();
 
@@ -233,7 +237,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // Validate image URL
     if (imageUrl && !imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)$/i)) {
-      return interaction.reply({ content: '❌ Invalid image URL! Must be a direct link to an image file.', ephemeral: true });
+      return interaction.reply({ content: '❌ Invalid image URL! Must be a direct image link.', ephemeral: true });
     }
 
     welcomeSettings[guildId] = {
@@ -247,7 +251,7 @@ client.on('interactionCreate', async (interaction) => {
     saveSettings(welcomeSettings);
 
     interaction.reply({
-      content: '✅ Welcome message settings updated!',
+      content: '✅ Welcome settings saved!',
       ephemeral: true,
     });
   }
